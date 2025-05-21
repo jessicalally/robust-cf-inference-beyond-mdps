@@ -63,12 +63,13 @@ def create_transition_prob_string_compressed(lower_probs, upper_probs):
 
     return prob_str
 
-def main():
-    tra_filename = f"transition_matrices/gridworld_tra.pickle"
-    filename = f"ICFMDPs/gridworld.jl"
 
-    with open(tra_filename, "rb") as f:
-        transition_matrix = pickle.load(f)
+def convert_transition_matrix_to_julia_imdp(transition_matrix, tra_filename = f"transition_matrices/gridworld_tra.pickle", filename = f"MDPs/gridworld.jl"):
+    global TRANSITION_PROB_COUNTER
+    TRANSITION_PROB_COUNTER = 1
+
+    # with open(tra_filename, "rb") as f:
+    #     transition_matrix = pickle.load(f)
 
     transition_probs_str = ""
     actions_str = ""
@@ -83,109 +84,11 @@ def main():
             i += 1
 
     rewards = np.zeros(11 * 16)
-    for s in range(11 * 16):
+    for s in range(2 * 16):
         if s%16 == 6:
             rewards[s] = -100
-            
         elif s%16 == 15:
             rewards[s] = 100
-
-        elif s%16 in [1, 4, 5]:
-            rewards[s] = 1.0
-        elif s%16 in [2, 8, 9]:
-            rewards[s] = 2.0
-        elif s%16 in [3, 10, 12]:
-            rewards[s] = 3.0
-        elif s%16 in [7, 13]:
-            rewards[s]= 4.0
-        elif s%16 in [11, 14]:
-            rewards[s] = 5.0
-
-    string_array = [str(x) for x in rewards]
-    rewards_str = "[" + ", ".join(string_array) + "]"
-
-    transition_probs_code = f"""
-    using IntervalMDP
-    using JLD2
-    using SparseArrays
-
-    {transition_probs_str}
-
-    transition_probs = [{actions_str}]
-
-    initial_states = [Int32(1)]
-
-    mdp = IntervalMarkovDecisionProcess(transition_probs, initial_states)
-    """
-
-    interval_mdp_code = f"""
-    discount_factor = 1.0
-    V_mins = []
-    V_maxs = []
-
-    for i in 1:10
-        prop = FiniteTimeReward({rewards_str}, discount_factor, i)
-
-        spec = Specification(prop, Pessimistic, Maximize)
-        problem = Problem(mdp, spec)
-        V_min, k, residual = value_iteration(problem)
-        V_min = Array(V_min)
-        push!(V_mins, V_min)
-
-        spec = Specification(prop, Optimistic, Maximize)
-        problem = Problem(mdp, spec)
-        V_max, k, residual = value_iteration(problem)
-        V_max = Array(V_max)
-        push!(V_maxs, V_max)    
-    end
-
-    JLD2.save("MDPs/gridworld_value_pessimistic.jld2", "data", V_mins)
-    JLD2.save("MDPs/gridworld_value_optimistic.jld2", "data", V_maxs)
-
-    time_horizon = 10
-
-    prop = FiniteTimeReward({rewards_str}, discount_factor, time_horizon)
-
-    spec = Specification(prop, Pessimistic, Maximize)
-    problem = Problem(mdp, spec)
-    V, k, residual = value_iteration(problem)
-    policy = control_synthesis(problem)
-
-    println(policy)
-
-    JLD2.save("MDPs/gridworld_policy.jld2", "data", policy)
-    """
-
-    generate_julia_file(filename, interval_mdp_code, transition_probs_code)
-    print(f"Julia file '{filename}' generated successfully.")
-
-def convert_transition_matrix_to_julia_imdp(transition_matrix, tra_filename = f"transition_matrices/gridworld_tra.pickle", filename = f"MDPs/gridworld.jl"):
-    global TRANSITION_PROB_COUNTER
-    TRANSITION_PROB_COUNTER = 1
-
-    # with open(tra_filename, "rb") as f:
-    #     transition_matrix = pickle.load(f)
-
-    transition_probs_str = ""
-    actions_str = ""
-
-    i = 1
-
-    for t in range(1):
-        for s in range(16):
-            probs = transition_matrix[(t,s)]
-            transition_probs_str += f"{create_transition_prob_string_compressed(probs[0], probs[1])}\n"
-            actions_str += f"""["0", "1", "2", "3"] => prob{i}, """
-            i += 1
-
-    rewards = np.zeros(11 * 16)
-    for s in range(11 * 16):
-        if s%16 == 6:
-            rewards[s] = -100
-            
-        elif s%16 == 15:
-            rewards[s] = 100
-
         elif s%16 in [1, 4, 5]:
             rewards[s] = 1.0
         elif s%16 in [2, 8, 9]:

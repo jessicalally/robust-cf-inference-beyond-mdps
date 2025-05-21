@@ -12,7 +12,7 @@ def format_transition_matrix_for_julia(interval_CF_MDP, n_timesteps, n_states, n
 
             for a in range(n_actions):
                 for s_prime in range(n_states):
-                    bounds = interval_CF_MDP[t][s, a, s_prime]
+                    bounds = interval_CF_MDP[t, s, a, s_prime]
                     lower_transition_probs[((t+1)*16) + s_prime, a] = bounds[0]
                     upper_transition_probs[((t+1)*16) + s_prime, a] = bounds[1]
 
@@ -64,3 +64,17 @@ def load_value_function(filename, n_timesteps, n_states):
                 V[t-1, s] = float_array[((t-1) * n_states)+s]
     
     return V.astype(float)
+
+
+def save_imdp_to_file(filename, imdp):
+    n_states, n_actions = imdp.shape[:2]
+    
+    with open(filename, 'w') as f:
+        for s in range(n_states):
+            for a in range(n_actions):
+                f.write(f"State {s}, Action {a}:\n")
+                for s_prime in range(n_states):
+                    lb, ub = imdp[s, a, s_prime]
+                    if lb > 0 or ub > 0:
+                        f.write(f"  -> State {s_prime}: [{lb:.4f}, {ub:.4f}]\n")
+                f.write("\n")

@@ -175,3 +175,5 @@ cython_debug/
 
 # Generated data
 MDPs/
+ICFMDPs/
+*.txt

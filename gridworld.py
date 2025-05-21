@@ -151,3 +151,9 @@ class MDP:
     # Returns an example suboptimal trajectory that enters the dangerous, terminal state.
     def sample_suboptimal_trajectory(self, n_steps=10):
         return [[0, 1, 1, 1],  [1, 2, 1, 2], [2, 6, 2, -100],  [6, 6, 0, -100], [6, 6, 0, -100], [6, 6, 0, -100], [6, 6, 0, -100], [6, 6, 0, -100], [6, 6, 0, -100], [6, 6, 0, -100]]
+    
+
+    def get_possible_transitions(self):
+        # Returns list of transitions that are possible - we assume knowledge of the tree structure of the MDP.
+        possible_transitions = np.nonzero(self.transition_matrix)
+        return list(zip(*possible_transitions))

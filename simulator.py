@@ -9,9 +9,10 @@ class Simulator:
 
     def __init__(self, mdp):
         self.mdp = mdp
-        self.num_episodes = 50000
+        self.num_episodes = 10000
         self.max_steps = 20
-        self.delta = 0.05 
+        self.delta = 0.05
+        self.possible_transitions = mdp.get_possible_transitions()
 
 
     def _simulate_transitions(self):
@@ -44,18 +45,19 @@ class Simulator:
             for a in range(self.mdp.n_actions):
                 N = state_action_counts.get((s, a), 0)
                 for s_prime in range(self.mdp.n_states):
-                    count = transition_counts.get((s, a, s_prime), 0)
-                    if N > 0:
-                        p_hat = count / N
-                        # Hoeffding-style bound
-                        epsilon = sqrt(log(2 / self.delta) / (2 * N))
-                        lb = max(0.0, p_hat - epsilon)
-                        ub = min(1.0, p_hat + epsilon)
-                    else:
-                        lb, ub = 0.0, 1.0  # No data: full uncertainty
+                    if (s, a, s_prime) in self.possible_transitions:
+                        count = transition_counts.get((s, a, s_prime), 0)
+                        if N > 0:
+                            p_hat = count / N
+                            # Hoeffding-style bound
+                            epsilon = sqrt(log(2 / self.delta) / (2 * N))
+                            lb = max(0.0, p_hat - epsilon)
+                            ub = min(1.0, p_hat + epsilon)
+                        else:
+                            lb, ub = 0.0, 1.0  # No data: full uncertainty
 
-                    imdp[s, a, s_prime, 0] = lb
-                    imdp[s, a, s_prime, 1] = ub
+                        imdp[s, a, s_prime, 0] = lb
+                        imdp[s, a, s_prime, 1] = ub
 
         return imdp
 

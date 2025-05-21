@@ -111,7 +111,7 @@ class CFBoundCalculator:
         if len(overlapping_support) == 0:
             # The supports are fully disjoint.
             if self.imdp_transition_matrix[s, a, s_prime, 0] > 1 - self.imdp_transition_matrix[self.observed_state, self.observed_action, self.observed_next_state, 0]:
-                return (self.imdp_transition_matrix[s, a, s_prime, 0] - (1 - self.transition_matrix[self.observed_state, self.observed_action, self.observed_next_state, 0])) / self.transition_matrix[self.observed_state, self.observed_action, self.observed_next_state, 0]
+                return (self.imdp_transition_matrix[s, a, s_prime, 0] - (1 - self.imdp_transition_matrix[self.observed_state, self.observed_action, self.observed_next_state, 0])) / self.imdp_transition_matrix[self.observed_state, self.observed_action, self.observed_next_state, 0]
             else:
                 return 0.0 
  

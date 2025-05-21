@@ -1,9 +1,5 @@
-from gridworld import MDP
-from gridworld_utils import convert_transition_matrix_to_julia_imdp
-from imdp_cf_bounds import MultiStepCFBoundCalculator
 from simulator import Simulator
 import numpy as np
-import utils
 
 # Generates IMDP from observed data.
 
@@ -33,12 +29,11 @@ def normalise_imdp(imdp_transition_matrix, observed_path):
     return imdp_transition_matrix
 
 
-def learn_imdp():
+def learn_imdp(mdp):
     # Generates data-driven IMDP.
-    mdp = MDP()
     simulator = Simulator(mdp)
 
-    return simulator.learn_imdp(), mdp
+    return simulator.learn_imdp()
 
 
 def example_toy_imdp():
@@ -61,18 +56,3 @@ def example_toy_imdp():
             imdp_transition_matrix[s, a, :, 1] = upper_bounds
 
     return imdp_transition_matrix
-
-# Generate IMDP from simulations.
-imdp, mdp = learn_imdp()
-
-# Generate observed path, and normalise IMDP.
-observed_path = mdp.sample_suboptimal_trajectory()
-imdp = normalise_imdp(imdp, observed_path)
-utils.save_imdp_to_file("gridworld_imdp.txt", imdp)
-
-cf_bound_calculator = MultiStepCFBoundCalculator(imdp)
-cf_imdp = cf_bound_calculator.calculate_bounds(observed_path)
-print(cf_imdp.shape)
-
-julia_cf_imdp = utils.format_transition_matrix_for_julia(cf_imdp, 10, 16, 4)
-convert_transition_matrix_to_julia_imdp(julia_cf_imdp)

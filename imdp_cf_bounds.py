@@ -1,6 +1,10 @@
+import cvxpy as cp
+import math
 import numpy as np
 from decimal import Decimal
 from multiprocessing import Process, Manager
+
+# Provides methods for calculating the CF probabilities of a data-driven IMDP.
 
 class CFBoundCalculator:
     def __init__(self, observed_state, observed_action, observed_next_state, imdp_transition_matrix):
@@ -30,6 +34,67 @@ class CFBoundCalculator:
                 return True
             
         return False
+    
+
+    def _optimise_sum_max_ubs_of_other_transitions(self, s, a, s_prime):
+        # TODO: can we instead rewrite this as extra constraints? e.g., the cs constraint
+        def _exact_upper_bound(P_obs, P_cf, s_prime_prime):
+            if s == self.observed_state and a == self.observed_action:
+                if s_prime_prime == self.observed_next_state:
+                    return 1.0
+                else:
+                    return 0.0
+                
+            # TODO: we can't evaluate the support, because it depends on the cvxpy variables. In most cases we know that the supports overlap. But, depending on the sampled probs from the IMDP, we may sample something that has disjoint support.
+            # TODO: to solve this, we may be able to add more conditions into the problem, and only run the optimisation if we really have to.
+
+            # support_of_observed = set(np.nonzero(P_obs)[0])
+            # support_of_cf = set(np.nonzero(P_cf)[0])
+            # overlapping_support = support_of_observed.intersection(support_of_cf)
+
+            # if len(overlapping_support) > 0:
+            if s_prime_prime != self.observed_next_state:
+                if P_obs[s_prime_prime] > 0 and not s_prime_prime == self.observed_next_state:
+                    if (P_cf[self.observed_next_state] / P_obs[self.observed_next_state]) > (P_cf[s_prime_prime] / P_obs[s_prime_prime]):
+                        return 0.0
+                    
+                if P_obs[s_prime_prime] > 0:
+                    return min(1 - P_cf[self.observed_next_state], P_cf[s_prime_prime])
+                else:
+                    return min(1 - P_cf[self.observed_next_state], P_cf[s_prime_prime] / P_obs[self.observed_next_state])
+                
+            else:
+                if P_obs[self.observed_next_state] <= P_cf[s_prime_prime]:
+                    return 1.0
+                else:
+                    return P_cf[s_prime_prime] / P_obs[self.observed_next_state]
+                
+            # (s, a) has disjoint support from (s_t, a_t).
+            # return min(P_cf[s_prime_prime], P_obs[self.observed_next_state]) / P_obs[self.observed_next_state]
+
+        n_states = self.imdp_transition_matrix.shape[0]
+
+        P_obs = cp.Variable(n_states)
+        P_cf = cp.Variable(n_states)
+
+        constraints = [
+            cp.sum(P_obs) == 1,
+            cp.sum(P_cf) == 1,
+            P_obs >= self.imdp_transition_matrix[self.observed_state, self.observed_action, :, 0],
+            P_obs <= self.imdp_transition_matrix[self.observed_state, self.observed_action, :, 1],
+            P_cf >= self.imdp_transition_matrix[s, a, :, 0],
+            P_cf <= self.imdp_transition_matrix[s, a, :, 1]
+        ]
+
+        objective_expr = cp.sum([_exact_upper_bound(P_obs, P_cf, i) for i in range(n_states) if i != s_prime])
+        objective = cp.Maximize(objective_expr)
+
+        prob = cp.Problem(objective, constraints)
+        prob.solve()
+
+        print("Optimal value:", prob.value)
+        print("Optimal P(.|s_t, a_t):", P_obs.value)
+        print("Optimal P(.|s, a):", P_cf.value)
 
 
     def lower_bound(self, s, a, s_prime):
@@ -66,14 +131,14 @@ class CFBoundCalculator:
 
         # Case 1: s' = s_{t+1}
         if s_prime == self.observed_next_state:
-            return max(self.imdp_transition_matrix[s, a, s_prime, 0], 1 - _sum_max_ubs_of_other_transitions)
+            return max(self.imdp_transition_matrix[s, a, s_prime, 0], 1 - _sum_max_ubs_of_other_transitions())#self._optimise_sum_max_ubs_of_other_transitions(s, a, s_prime))
         
         # Case 2: counterfactual stability could limit the CF prob to 0.
         elif self._sometimes_counterfactual_stability(s, a, s_prime):
             return 0
         
         # Case 3: all other cases.
-        return max(0, 1 - _sum_max_ubs_of_other_transitions())
+        return max(0, 1 - _sum_max_ubs_of_other_transitions()) #self._optimise_sum_max_ubs_of_other_transitions(s, a, s_prime))
             
 
     def upper_bound(self, s, a, s_prime):
@@ -129,7 +194,9 @@ class CFBoundCalculator:
             for a in range(n_actions):
                 for s_prime in range(n_states):
                     lb = Decimal(self.lower_bound(s, a, s_prime))
+                    assert(not math.isnan(lb))
                     ub = Decimal(self.upper_bound(s, a, s_prime))
+                    assert(not math.isnan(ub))
                     interval_cf_transition_matrix[s, a, s_prime] = [lb, ub]
                 
         return interval_cf_transition_matrix

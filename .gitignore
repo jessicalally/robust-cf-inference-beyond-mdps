@@ -177,3 +177,5 @@ cython_debug/
 MDPs/
 ICFMDPs/
 *.txt
+results/
+*.pickle

@@ -7,11 +7,11 @@ from tqdm import trange
 
 class Simulator:
 
-    def __init__(self, mdp):
+    def __init__(self, mdp, num_episodes, max_steps, delta):
         self.mdp = mdp
-        self.num_episodes = 10000
-        self.max_steps = 20
-        self.delta = 0.05
+        self.num_episodes = num_episodes
+        self.max_steps = max_steps
+        self.delta = delta
         self.possible_transitions = mdp.get_possible_transitions()
 
 

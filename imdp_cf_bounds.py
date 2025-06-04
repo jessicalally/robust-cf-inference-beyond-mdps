@@ -30,6 +30,9 @@ class CFBoundCalculator:
     # This checks whether the counterfactual stability assumption could limit the CF prob of the transition to 0.
     def _sometimes_counterfactual_stability(self, s, a, s_prime):
         if s_prime != self.observed_next_state and self.imdp_transition_matrix[self.observed_state, self.observed_action, s_prime, 1] > 0.0:
+            assert(self.imdp_transition_matrix[self.observed_state, self.observed_action, self.observed_next_state, 0] > 0)
+            assert(self.imdp_transition_matrix[self.observed_state, self.observed_action, s_prime, 1] > 0)
+            
             if (self.imdp_transition_matrix[s, a, self.observed_next_state, 1] / self.imdp_transition_matrix[self.observed_state, self.observed_action, self.observed_next_state, 0]) > (self.imdp_transition_matrix[s, a, s_prime, 0] / self.imdp_transition_matrix[self.observed_state, self.observed_action, s_prime, 1]):
                 return True
             
@@ -188,15 +191,19 @@ class CFBoundCalculator:
         n_states = self.imdp_transition_matrix.shape[0]
         n_actions = self.imdp_transition_matrix.shape[1]
 
-        interval_cf_transition_matrix = np.zeros(shape=(n_states, n_actions, n_states, 2))
+        interval_cf_transition_matrix = np.zeros(shape=(n_states, n_actions, n_states, 2), dtype=np.float64)
 
         for s in range(n_states):
             for a in range(n_actions):
                 for s_prime in range(n_states):
                     lb = Decimal(self.lower_bound(s, a, s_prime))
                     assert(not math.isnan(lb))
+                    lb = max(0.0, lb)
+
                     ub = Decimal(self.upper_bound(s, a, s_prime))
                     assert(not math.isnan(ub))
+                    ub = min(1.0, ub)
+
                     interval_cf_transition_matrix[s, a, s_prime] = [lb, ub]
                 
         return interval_cf_transition_matrix

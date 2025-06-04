@@ -7,8 +7,8 @@ def format_transition_matrix_for_julia(interval_CF_MDP, n_timesteps, n_states, n
 
     for t in range(n_timesteps):
         for s in range(n_states):
-            lower_transition_probs = np.zeros(shape=(n_states * (n_timesteps+1), n_actions))
-            upper_transition_probs = np.zeros(shape=(n_states * (n_timesteps+1), n_actions))
+            lower_transition_probs = np.zeros(shape=(n_states * (n_timesteps+1), n_actions), dtype=np.float64)
+            upper_transition_probs = np.zeros(shape=(n_states * (n_timesteps+1), n_actions), dtype=np.float64)
 
             for a in range(n_actions):
                 for s_prime in range(n_states):

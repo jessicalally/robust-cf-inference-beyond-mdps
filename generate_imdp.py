@@ -21,7 +21,7 @@ def normalise_imdp(imdp_transition_matrix, observed_path):
     # Assumption 2: the LB of the observed transition must be greater than 0.
     epsilon = 0.01 # Minimum value of observed transition.
 
-    transitions = [(observed_path[i][1], observed_path[i][2], observed_path[i + 1][1]) for i in range(len(observed_path) - 1)]
+    transitions = [(observed_path[i][0], observed_path[i][2], observed_path[i][1]) for i in range(len(observed_path) - 1)]
 
     for (observed_state, observed_action, observed_next_state) in transitions:
         imdp_transition_matrix[observed_state, observed_action, observed_next_state, 0] = max(epsilon, imdp_transition_matrix[observed_state, observed_action, observed_next_state, 0])
@@ -29,9 +29,9 @@ def normalise_imdp(imdp_transition_matrix, observed_path):
     return imdp_transition_matrix
 
 
-def learn_imdp(mdp):
+def learn_imdp(mdp, num_episodes=10000, max_steps=20, delta=0.05):
     # Generates data-driven IMDP.
-    simulator = Simulator(mdp)
+    simulator = Simulator(mdp, num_episodes, max_steps, delta)
 
     return simulator.learn_imdp()
 

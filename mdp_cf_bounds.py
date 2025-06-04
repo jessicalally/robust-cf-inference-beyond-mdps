@@ -188,7 +188,7 @@ class MultiStepCFBoundCalculator:
         n_states = self.transition_matrix.shape[0]
         n_actions = self.transition_matrix.shape[1]
 
-        interval_cf_transition_matrix = np.zeros(shape=(n_timesteps, n_states, n_actions, n_states, 2))
+        interval_cf_transition_matrix = np.zeros(shape=(n_timesteps, n_states, n_actions, n_states, 2), dtype=np.float64)
 
         for t in range(n_timesteps):
             print(f"Calculating bounds at time t={t}")

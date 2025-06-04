@@ -1,3 +1,4 @@
+from decimal import Decimal, getcontext
 import numpy as np
 import pickle
 
@@ -11,8 +12,13 @@ def generate_julia_file(filename, interval_mdp_code, transition_probs_code):
 def create_transition_prob_string(lower_probs, upper_probs):
     global TRANSITION_PROB_COUNTER
 
-    lower_str = "\n        ".join([" ".join(map(str, row)) for row in lower_probs])
-    upper_str = "\n        ".join([" ".join(map(str, row)) for row in upper_probs])
+    lower_str = "\n        ".join([
+        " ".join(f"{x:.5g}" for x in row) for row in lower_probs
+    ])
+
+    upper_str = "\n        ".join([
+        " ".join(f"{x:.5g}" for x in row) for row in upper_probs
+    ])
 
     prob_str = f"""
     prob{TRANSITION_PROB_COUNTER} = IntervalProbabilities(;
@@ -29,6 +35,10 @@ def create_transition_prob_string(lower_probs, upper_probs):
 
     return prob_str
 
+def format_float(x):
+    s = f"{x:.15f}"
+    return s if "." in s or "e" in s else s + ".0"
+
 def create_transition_prob_string_compressed(lower_probs, upper_probs):
     global TRANSITION_PROB_COUNTER
 
@@ -37,14 +47,28 @@ def create_transition_prob_string_compressed(lower_probs, upper_probs):
 
     for col in range(lower_probs.shape[1]):
         non_zero_probs_indices = np.nonzero(upper_probs[:, col])[0] # use upper bound indicies because some states might have LB=0
+        
+        # Probs are correct to 15dp
+        upper_probs = np.round(upper_probs, decimals=15)
+        lower_probs = np.round(lower_probs, decimals=15)
 
-        non_zero_probs_lower = ", ".join(map(str, lower_probs[non_zero_probs_indices, col]))
-        non_zero_probs_upper = ", ".join(map(str, upper_probs[non_zero_probs_indices, col]))
+        total = np.sum(lower_probs[non_zero_probs_indices, col])
+
+        if total > 1.0:
+            lower_probs[non_zero_probs_indices[0], col] -= 1e-15    
+
+        total = np.sum(upper_probs[non_zero_probs_indices, col])
+
+        if total < 1.0:
+            upper_probs[non_zero_probs_indices[0], col] += 1e-15    
+
+        non_zero_probs_lower = ", ".join(format_float(x) for x in lower_probs[non_zero_probs_indices, col])      
+        non_zero_probs_upper = ", ".join(format_float(x) for x in upper_probs[non_zero_probs_indices, col])
+
         non_zero_probs_indices = [idx+1 for idx in non_zero_probs_indices]
         non_zero_probs_indices = ", ".join(map(str, non_zero_probs_indices))
         
         lower_str_parts.append(f"\n\t\t\tSparseVector({lower_probs.shape[0]}, [{non_zero_probs_indices}], [{non_zero_probs_lower}]),")
-
         upper_str_parts.append(f"\n\t\t\tSparseVector({upper_probs.shape[0]}, [{non_zero_probs_indices}], [{non_zero_probs_upper}]),")
 
     lower_str = "".join(lower_str_parts)
@@ -64,7 +88,7 @@ def create_transition_prob_string_compressed(lower_probs, upper_probs):
     return prob_str
 
 
-def convert_transition_matrix_to_julia_imdp(transition_matrix, tra_filename = f"transition_matrices/gridworld_tra.pickle", filename = f"MDPs/gridworld.jl"):
+def convert_transition_matrix_to_julia_imdp(transition_matrix, num_transitions, delta, tra_filename = f"transition_matrices/gridworld_tra.pickle", filename = f"MDPs/gridworld.jl"):
     global TRANSITION_PROB_COUNTER
     TRANSITION_PROB_COUNTER = 1
 
@@ -84,7 +108,7 @@ def convert_transition_matrix_to_julia_imdp(transition_matrix, tra_filename = f"
             i += 1
 
     rewards = np.zeros(11 * 16)
-    for s in range(2 * 16):
+    for s in range(11 * 16):
         if s%16 == 6:
             rewards[s] = -100
         elif s%16 == 15:
@@ -138,8 +162,8 @@ def convert_transition_matrix_to_julia_imdp(transition_matrix, tra_filename = f"
         push!(V_maxs, V_max)    
     end
 
-    JLD2.save("ICFMDPs/gridworld_value_pessimistic.jld2", "data", V_mins)
-    JLD2.save("ICFMDPs/gridworld_value_optimistic.jld2", "data", V_maxs)
+    JLD2.save("ICFMDPs/gridworld_value_pessimistic_{num_transitions}_{delta}.jld2", "data", V_mins)
+    JLD2.save("ICFMDPs/gridworld_value_optimistic_{num_transitions}_{delta}.jld2", "data", V_maxs)
 
     time_horizon = 10
 
@@ -152,7 +176,7 @@ def convert_transition_matrix_to_julia_imdp(transition_matrix, tra_filename = f"
 
     println(policy)
 
-    JLD2.save("ICFMDPs/gridworld_policy.jld2", "data", policy)
+    JLD2.save("ICFMDPs/gridworld_policy_{num_transitions}_{delta}.jld2", "data", policy)
     """
 
     generate_julia_file(filename, interval_mdp_code, transition_probs_code)

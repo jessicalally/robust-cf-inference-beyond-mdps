@@ -1,4 +1,6 @@
 import cvxpy as cp
+import gurobipy as gp
+from gurobipy import GRB
 import math
 import numpy as np
 from decimal import Decimal
@@ -40,65 +42,175 @@ class CFBoundCalculator:
     
 
     def _optimise_sum_max_ubs_of_other_transitions(self, s, a, s_prime):
-        # TODO: can we instead rewrite this as extra constraints? e.g., the cs constraint
-        def _exact_upper_bound(P_obs, P_cf, s_prime_prime):
-            if s == self.observed_state and a == self.observed_action:
-                if s_prime_prime == self.observed_next_state:
-                    return 1.0
-                else:
-                    return 0.0
-                
-            # TODO: we can't evaluate the support, because it depends on the cvxpy variables. In most cases we know that the supports overlap. But, depending on the sampled probs from the IMDP, we may sample something that has disjoint support.
-            # TODO: to solve this, we may be able to add more conditions into the problem, and only run the optimisation if we really have to.
-
-            # support_of_observed = set(np.nonzero(P_obs)[0])
-            # support_of_cf = set(np.nonzero(P_cf)[0])
-            # overlapping_support = support_of_observed.intersection(support_of_cf)
-
-            # if len(overlapping_support) > 0:
-            if s_prime_prime != self.observed_next_state:
-                if P_obs[s_prime_prime] > 0 and not s_prime_prime == self.observed_next_state:
-                    if (P_cf[self.observed_next_state] / P_obs[self.observed_next_state]) > (P_cf[s_prime_prime] / P_obs[s_prime_prime]):
-                        return 0.0
-                    
-                if P_obs[s_prime_prime] > 0:
-                    return min(1 - P_cf[self.observed_next_state], P_cf[s_prime_prime])
-                else:
-                    return min(1 - P_cf[self.observed_next_state], P_cf[s_prime_prime] / P_obs[self.observed_next_state])
-                
-            else:
-                if P_obs[self.observed_next_state] <= P_cf[s_prime_prime]:
-                    return 1.0
-                else:
-                    return P_cf[s_prime_prime] / P_obs[self.observed_next_state]
-                
-            # (s, a) has disjoint support from (s_t, a_t).
-            # return min(P_cf[s_prime_prime], P_obs[self.observed_next_state]) / P_obs[self.observed_next_state]
-
+        # TODO: add extra checks to ensure optimisation is only run when necessary.
         n_states = self.imdp_transition_matrix.shape[0]
+        model = gp.Model()
 
-        P_obs = cp.Variable(n_states)
-        P_cf = cp.Variable(n_states)
+        P_obs = {} # Interventional distribution of observed state-action pair.
+        P_cf = {} # Interventional distribution of CF state-action pair.
+        upper_cf_bounds = {} # Stores the optimised upper cf bound for each state.
 
-        constraints = [
-            cp.sum(P_obs) == 1,
-            cp.sum(P_cf) == 1,
-            P_obs >= self.imdp_transition_matrix[self.observed_state, self.observed_action, :, 0],
-            P_obs <= self.imdp_transition_matrix[self.observed_state, self.observed_action, :, 1],
-            P_cf >= self.imdp_transition_matrix[s, a, :, 0],
-            P_cf <= self.imdp_transition_matrix[s, a, :, 1]
-        ]
+        M = 1e3 # Very big value.
+        epsilon = 1e-6  # Very small value.
 
-        objective_expr = cp.sum([_exact_upper_bound(P_obs, P_cf, i) for i in range(n_states) if i != s_prime])
-        objective = cp.Maximize(objective_expr)
+        # Define transition variables.
+        for i in range(n_states):
+            P_obs[i] = model.addVar(lb=0, ub=1, name=f"P_obs_{i}")
+            P_cf[i] = model.addVar(lb=0, ub=1, name=f"P_cf_{i}")
 
-        prob = cp.Problem(objective, constraints)
-        prob.solve()
+        # Probabilities must sum to 1.
+        model.addConstr(gp.quicksum(P_obs[i] for i in range(n_states)) == 1)
+        model.addConstr(gp.quicksum(P_cf[i] for i in range(n_states)) == 1)
 
-        print("Optimal value:", prob.value)
-        print("Optimal P(.|s_t, a_t):", P_obs.value)
-        print("Optimal P(.|s, a):", P_cf.value)
+        # Apply lower/upper bounds from IMDP to interventional distributions.
+        for i in range(n_states):
+            P_obs[i].LB = float(self.imdp_transition_matrix[self.observed_state, self.observed_action, i, 0])
+            P_obs[i].UB = float(self.imdp_transition_matrix[self.observed_state, self.observed_action, i, 1])
+            P_cf[i].LB = float(self.imdp_transition_matrix[s, a, i, 0])
+            P_cf[i].UB = float(self.imdp_transition_matrix[s, a, i, 1])
 
+        # Indicator variables that determine whether the supports are disjoint or overlap during optimisation.
+        support_obs = {} # Indicates whether states are in the support of the observed state-action pair.
+        support_cf = {} # Indicates whether states are in the support of the CF state-action pair.
+        support_overlap = {} # Indicates whether states are in both supports.
+
+        # Detects overlapping support.
+        for i in range(n_states):
+            support_obs[i] = model.addVar(vtype=GRB.BINARY, name=f"support_obs_{i}")
+            support_cf[i] = model.addVar(vtype=GRB.BINARY, name=f"support_cf_{i}")
+            support_overlap[i] = model.addVar(vtype=GRB.BINARY, name=f"support_overlap_{i}")
+
+            # support_obs[i] = 1 <-> P_obs[i] >= epsilon.
+            model.addConstr(P_obs[i] >= epsilon * support_obs[i])
+            model.addConstr(P_obs[i] <= support_obs[i])
+
+            # support_cf[i] = 1 <-> P_cf[i] >= epsilon.
+            model.addConstr(P_cf[i] >= epsilon * support_cf[i])
+            model.addConstr(P_cf[i] <= support_cf[i])
+
+            # support_ovelap[i] = 1 <-> support_obs[i] = 1 AND support_cf[i] = 1.
+            model.addConstr(support_overlap[i] <= support_obs[i])
+            model.addConstr(support_overlap[i] <= support_cf[i])
+            model.addConstr(support_overlap[i] >= support_obs[i] + support_cf[i] - 1)
+
+        # total_ovelap evaluates the number of states in the support overlap.
+        total_overlap = model.addVar(name="total_overlap")
+        model.addConstr(total_overlap == gp.quicksum(support_overlap[i] for i in range(n_states)))
+
+        # is_disjoint = 1 <-> supports are disjoint.
+        is_disjoint = model.addVar(vtype=GRB.BINARY, name="is_disjoint")
+        model.addConstr(total_overlap <= M * (1 - is_disjoint))
+        model.addConstr(total_overlap >= 1 - M * is_disjoint)
+
+        # Compute upper bounds
+        for i in range(n_states):
+            if i == s_prime:
+                continue  # Excludes target state (s_prime) of LB calculation from sum.
+
+            upper = model.addVar(lb=0, ub=1, name=f"ub_{i}")
+            upper_cf_bounds[i] = upper
+
+            # If the state-action pair is the observed, we know the CF probs exactly.
+            if s == self.observed_state and a == self.observed_action:
+                if i == self.observed_next_state:
+                    model.addConstr(upper == 1.0)
+                else:
+                    model.addConstr(upper == 0.0)
+
+            else:
+                # This calculates what the upper bounds would be, if the distributions have disjoint support.
+                # Disjoint: min(P_obs[s'], P_cf[i]) / P_obs[s']
+                min_disjoint = model.addVar(lb=0, name=f"min_disjoint_{i}")
+                model.addConstr(min_disjoint <= P_cf[i])
+                model.addConstr(min_disjoint <= P_obs[self.observed_next_state])
+
+                ratio_disjoint = model.addVar(lb=0, name=f"ratio_disjoint_{i}")
+                model.addConstr(ratio_disjoint * P_obs[self.observed_next_state] == min_disjoint)
+                
+                ub_disjoint = model.addVar(lb=0, name=f"ub_disjoint_{i}")
+                model.addConstr(ub_disjoint == ratio_disjoint)
+
+                # This calculates what the upper bounds would be, if the distributions have overlapping support.
+                ub_overlap = model.addVar(lb=0, name=f"ub_overlap_{i}")
+                
+                # If this is the observed next state, monotonicity holds, but not CS.
+                # i == self.observed_next_state
+                # ub = 1 if P_cf[i] ≥ P_obs[i],
+                # ub = P_cf[i] / P_obs[i] otherwise
+                # gamma=1 <-> P_obs[i] <= P_cf[i]
+                if i == self.observed_next_state:
+                    gamma = model.addVar(vtype=GRB.BINARY, name=f"gamma_{i}")
+                    model.addConstr(P_obs[i] <= P_cf[i] + M * (1 - gamma))
+
+                    model.addConstr(ub_overlap <= 1 + M * (1 - gamma))
+                    model.addConstr(ub_overlap >= 1 - M * (1 - gamma))
+
+                    ratio_var = model.addVar(lb=0, name=f"ratio_var_{i}")
+                    model.addConstr(ratio_var * P_obs[i] == P_cf[i])
+
+                    model.addConstr(ub_overlap <= ratio_var + M * gamma)
+                    model.addConstr(ub_overlap >= ratio_var - M * gamma)
+
+                # Otherwise, monotonicity may hold, and CS may hold.
+                else:
+                    # LHS of CS condition.
+                    lhs = model.addVar(lb=0, name=f"lhs_{i}")
+                    # RHS of CS condition.
+                    rhs = model.addVar(lb=0, name=f"rhs_{i}")
+
+                    # delta_i=1 <-> CS condition reduces CF prob to 0.
+                    delta_i = model.addVar(vtype=GRB.BINARY, name=f"delta_{i}")
+
+                    model.addConstr(lhs == P_cf[self.observed_next_state] * P_obs[i])
+                    model.addConstr(rhs == P_cf[i] * P_obs[self.observed_next_state])
+                    model.addConstr(lhs <= rhs + M * delta_i)
+
+                    # CF prob = 0 if CS affects it.
+
+                    # Case: P_obs[i] > 0 (has support)
+                    ub_overlap_pos_obs = model.addVar(name=f"ub_pos_obs_{i}")
+                    min1 = model.addVar(lb=0, name=f"min1_{i}")
+                    model.addConstr(min1 <= 1 - P_cf[self.observed_next_state])
+                    model.addConstr(min1 <= P_cf[i])
+
+                    # Apply the correct logic:
+                    # - If delta_i == 1 (CS fails): ub = 0
+                    # - If delta_i == 0 (CS passes): ub = min(1 - P_cf[s'], P_cf[i])
+                    model.addConstr(ub_overlap_pos_obs <= M * (1 - delta_i))        # Enforce ub = 0 when CS fails
+                    model.addConstr(ub_overlap_pos_obs <= min1 + M * delta_i)       # Tight min when CS passes
+
+                    # Case: P_obs[i] == 0 (no observed support)
+                    ub_overlap_zero_obs = model.addVar(name=f"ub_zero_obs_{i}")
+                    ratio = model.addVar(name=f"ratio_zero_obs_{i}")
+                    model.addConstr(ratio * P_obs[self.observed_next_state] == P_cf[i])
+
+                    min2 = model.addVar(lb=0, name=f"min2_{i}")
+                    model.addConstr(min2 <= 1 - P_cf[self.observed_next_state])
+                    model.addConstr(min2 <= ratio)
+                    model.addConstr(ub_overlap_zero_obs == min2)
+
+                    # Final blend: if support_obs[i] == 1 → use ub_overlap_pos_obs, else use ub_overlap_zero_obs
+                    model.addConstr(
+                        ub_overlap == ub_overlap_pos_obs * support_obs[i] + ub_overlap_zero_obs * (1 - support_obs[i])
+                    )
+                    
+                # Select correct upper bound
+                model.addConstr(upper <= ub_disjoint + M * (1 - is_disjoint))
+                model.addConstr(upper >= ub_disjoint - M * (1 - is_disjoint))
+
+                model.addConstr(upper <= ub_overlap + M * is_disjoint)
+                model.addConstr(upper >= ub_overlap - M * is_disjoint)
+
+        # Set objective
+        model.setObjective(gp.quicksum(upper_cf_bounds[i] for i in range(n_states) if i != s_prime), GRB.MAXIMIZE)
+        model.optimize()
+
+        # Return results
+        print("Optimal value:", model.ObjVal)
+        print("Optimal P_obs:", [P_obs[i].X for i in range(n_states)])
+        print("Optimal P_cf:", [P_cf[i].X for i in range(n_states)])
+
+        return model.ObjVal
 
     def lower_bound(self, s, a, s_prime):
         if s == self.observed_state and a == self.observed_action:
@@ -121,7 +233,6 @@ class CFBoundCalculator:
         # Otherwise, the supports overlap.
         
         # This implementation is non-tight, this sum produces a non-tight LB. But, we could replace this calculation with an optimisation problem to find the exact LB.
-        # TODO: need to test the optimisation problem, to see (a) if it is possible and (b) how much slower it is.
         def _sum_max_ubs_of_other_transitions():
             n_states = self.imdp_transition_matrix.shape[0]
             sum_ubs = 0.0
@@ -134,14 +245,16 @@ class CFBoundCalculator:
 
         # Case 1: s' = s_{t+1}
         if s_prime == self.observed_next_state:
-            return max(self.imdp_transition_matrix[s, a, s_prime, 0], 1 - _sum_max_ubs_of_other_transitions())#self._optimise_sum_max_ubs_of_other_transitions(s, a, s_prime))
+            return max(self.imdp_transition_matrix[s, a, s_prime, 0], 1 - _sum_max_ubs_of_other_transitions())
+            # return max(self.imdp_transition_matrix[s, a, s_prime, 0], 1 - self._optimise_sum_max_ubs_of_other_transitions(s, a, s_prime))
         
         # Case 2: counterfactual stability could limit the CF prob to 0.
         elif self._sometimes_counterfactual_stability(s, a, s_prime):
             return 0
         
         # Case 3: all other cases.
-        return max(0, 1 - _sum_max_ubs_of_other_transitions()) #self._optimise_sum_max_ubs_of_other_transitions(s, a, s_prime))
+        return max(0, 1 - _sum_max_ubs_of_other_transitions())
+        # return max(0, 1 - self._optimise_sum_max_ubs_of_other_transitions(s, a, s_prime))
             
 
     def upper_bound(self, s, a, s_prime):

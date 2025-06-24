@@ -6,7 +6,7 @@ python3 evaluate_simulated_imdp.py train
 
 # Run robust value iteration on generated ICFMDPs
 echo "Running robust value iteration..."
-for max_transitions in 100 500 1000 10000; do
+for max_transitions in 1000 2500 5000 10000; do
     for delta in 0.01 0.05 0.1 0.2; do
         echo "Running experiment (${max_transitions}, ${delta})"
         julia "MDPs/simulated_gridworld_${max_transitions}_${delta}.jl"

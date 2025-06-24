@@ -1,9 +1,13 @@
 import cvxpy as cp
+import copy
+import gc
 import gurobipy as gp
 from gurobipy import GRB
 import math
 import numpy as np
+import os
 from decimal import Decimal
+import multiprocessing as mp
 from multiprocessing import Process, Manager
 
 # Provides methods for calculating the CF probabilities of a data-driven IMDP.
@@ -41,10 +45,9 @@ class CFBoundCalculator:
         return False
     
 
-    def _optimise_sum_max_ubs_of_other_transitions(self, s, a, s_prime):
+    def _optimise_sum_max_ubs_of_other_transitions(self, model, s, a, s_prime):
         # TODO: add extra checks to ensure optimisation is only run when necessary.
         n_states = self.imdp_transition_matrix.shape[0]
-        model = gp.Model()
 
         P_obs = {} # Interventional distribution of observed state-action pair.
         P_cf = {} # Interventional distribution of CF state-action pair.
@@ -206,13 +209,46 @@ class CFBoundCalculator:
         model.optimize()
 
         # Return results
-        print("Optimal value:", model.ObjVal)
-        print("Optimal P_obs:", [P_obs[i].X for i in range(n_states)])
-        print("Optimal P_cf:", [P_cf[i].X for i in range(n_states)])
+        # print("Optimal value:", model.ObjVal)
+        # print("Optimal P_obs:", [P_obs[i].X for i in range(n_states)])
+        # print("Optimal P_cf:", [P_cf[i].X for i in range(n_states)])
 
         return model.ObjVal
+    
 
-    def lower_bound(self, s, a, s_prime):
+    def lower_bound_tight(self, model, s, a, s_prime):
+        if s == self.observed_state and a == self.observed_action:
+            if s_prime == self.observed_next_state:
+                return 1.0
+            else:
+                return 0.0
+                        
+        support_of_observed = self._get_support(self.observed_state, self.observed_action)
+        support_of_cf = self._get_support(s, a)
+        overlapping_support = support_of_observed.intersection(support_of_cf)
+
+        if len(overlapping_support) == 0:
+            # The supports are fully disjoint.
+            if self.imdp_transition_matrix[s, a, s_prime, 0] > 1 - self.imdp_transition_matrix[self.observed_state, self.observed_action, self.observed_next_state, 0]:
+                return (self.imdp_transition_matrix[s, a, s_prime, 0] - (1 - self.imdp_transition_matrix[self.observed_state, self.observed_action, self.observed_next_state, 0])) / self.imdp_transition_matrix[self.observed_state, self.observed_action, self.observed_next_state, 0]
+            else:
+                return 0.0 
+ 
+        # Otherwise, the supports overlap.
+
+        # Case 1: s' = s_{t+1}
+        if s_prime == self.observed_next_state:
+            return max(self.imdp_transition_matrix[s, a, s_prime, 0], 1 - self._optimise_sum_max_ubs_of_other_transitions(model, s, a, s_prime))
+        
+        # Case 2: counterfactual stability could limit the CF prob to 0.
+        elif self._sometimes_counterfactual_stability(s, a, s_prime):
+            return 0
+        
+        # Case 3: all other cases.
+        return max(0, 1 - self._optimise_sum_max_ubs_of_other_transitions(model, s, a, s_prime))
+
+
+    def lower_bound_approx(self, s, a, s_prime):
         if s == self.observed_state and a == self.observed_action:
             if s_prime == self.observed_next_state:
                 return 1.0
@@ -246,7 +282,6 @@ class CFBoundCalculator:
         # Case 1: s' = s_{t+1}
         if s_prime == self.observed_next_state:
             return max(self.imdp_transition_matrix[s, a, s_prime, 0], 1 - _sum_max_ubs_of_other_transitions())
-            # return max(self.imdp_transition_matrix[s, a, s_prime, 0], 1 - self._optimise_sum_max_ubs_of_other_transitions(s, a, s_prime))
         
         # Case 2: counterfactual stability could limit the CF prob to 0.
         elif self._sometimes_counterfactual_stability(s, a, s_prime):
@@ -254,7 +289,6 @@ class CFBoundCalculator:
         
         # Case 3: all other cases.
         return max(0, 1 - _sum_max_ubs_of_other_transitions())
-        # return max(0, 1 - self._optimise_sum_max_ubs_of_other_transitions(s, a, s_prime))
             
 
     def upper_bound(self, s, a, s_prime):
@@ -298,9 +332,50 @@ class CFBoundCalculator:
 
         # Case 6: all other cases.
         return min(self.imdp_transition_matrix[s, a, s_prime, 1], 1 - self.imdp_transition_matrix[s, a, self.observed_next_state, 0])
-        
+    
 
-    def calculate_all_bounds(self):
+    def solve_one(self, args):
+        s, a, s_prime = args
+        env = gp.Env(empty=True)
+        env.setParam('OutputFlag', 0)
+        env.start()
+
+        model = gp.Model(env=env)
+
+        lb = Decimal(self.lower_bound_tight(model, s, a, s_prime))
+        assert(not math.isnan(lb))
+        lb = max(0.0, lb)
+
+        ub = Decimal(self.upper_bound(s, a, s_prime))
+        assert(not math.isnan(ub))
+        ub = min(1.0, ub)
+
+        # print(f"Proc {os.getpid()} fds: {len(os.listdir(f'/proc/{os.getpid()}/fd'))}")
+
+        model.dispose()
+        env.dispose()
+
+        return [lb, ub]
+    
+
+    def calculate_all_bounds_tight(self):
+        n_states = self.imdp_transition_matrix.shape[0]
+        n_actions = self.imdp_transition_matrix.shape[1]
+
+        interval_cf_transition_matrix = np.zeros(shape=(n_states, n_actions, n_states, 2), dtype=np.float64)
+        transitions = [(s, a, s_prime) for s in range(n_states) for a in range(n_actions) for s_prime in range(n_states)]
+
+        with mp.Pool(processes=4) as pool:
+            results = pool.map(self.solve_one, transitions)
+
+        for i, transition in enumerate(transitions):
+            s, a, s_prime = transition
+            interval_cf_transition_matrix[s, a, s_prime] = results[i]
+
+        return interval_cf_transition_matrix
+    
+
+    def calculate_all_bounds_approx(self):
         n_states = self.imdp_transition_matrix.shape[0]
         n_actions = self.imdp_transition_matrix.shape[1]
 
@@ -309,7 +384,7 @@ class CFBoundCalculator:
         for s in range(n_states):
             for a in range(n_actions):
                 for s_prime in range(n_states):
-                    lb = Decimal(self.lower_bound(s, a, s_prime))
+                    lb = Decimal(self.lower_bound_approx(s, a, s_prime))
                     assert(not math.isnan(lb))
                     lb = max(0.0, lb)
 
@@ -320,7 +395,7 @@ class CFBoundCalculator:
                     interval_cf_transition_matrix[s, a, s_prime] = [lb, ub]
                 
         return interval_cf_transition_matrix
-    
+
 
     # Run with n threads
     def split_work(self, a, n):
@@ -334,13 +409,18 @@ class CFBoundCalculator:
             upper_bounds[(s, a, s_prime)] = ub
 
 
-    def calculate_lower_bounds(self, chunk, lower_bounds):
+    def calculate_lower_bounds_tight(self, chunk, lower_bounds):
         for (s, a, s_prime) in chunk:
-            lb = Decimal(self.lower_bound(s, a, s_prime))
+            lb = Decimal(self.lower_bound_tight(s, a, s_prime))
+            lower_bounds[(s, a, s_prime)] = lb
+
+    def calculate_lower_bounds_approx(self, chunk, lower_bounds):
+        for (s, a, s_prime) in chunk:
+            lb = Decimal(self.lower_bound_approx(s, a, s_prime))
             lower_bounds[(s, a, s_prime)] = lb
 
 
-    def run_parallel(self, transitions):
+    def run_parallel_tight(self, transitions):
         processes = []
 
         with Manager() as manager:
@@ -359,7 +439,36 @@ class CFBoundCalculator:
             lower_bounds = manager.dict()
 
             for chunk in self.split_work(transitions, 32):
-                process = Process(target=self.calculate_lower_bounds, args=(chunk, lower_bounds))
+                process = Process(target=self.calculate_lower_bounds_tight, args=(chunk, lower_bounds))
+                processes.append(process)
+                process.start()
+
+            for process in processes:
+                process.join()
+
+            return upper_bounds.copy(), lower_bounds.copy()
+        
+
+    def run_parallel_approx(self, transitions):
+        processes = []
+
+        with Manager() as manager:
+            upper_bounds = manager.dict()
+
+            # Calculate all of the upper bounds first, then all the lower bounds, since we need the upper bounds
+            # to calculate the lower bounds.
+            for chunk in self.split_work(transitions, 32):
+                process = Process(target=self.calculate_upper_bounds, args=(chunk, upper_bounds))
+                processes.append(process)
+                process.start()
+
+            for process in processes:
+                process.join()
+
+            lower_bounds = manager.dict()
+
+            for chunk in self.split_work(transitions, 32):
+                process = Process(target=self.calculate_lower_bounds_approx, args=(chunk, lower_bounds))
                 processes.append(process)
                 process.start()
 
@@ -369,7 +478,7 @@ class CFBoundCalculator:
             return upper_bounds.copy(), lower_bounds.copy()
 
 
-    def parallel_calculate_all_bounds(self):
+    def parallel_calculate_all_bounds_approx(self):
         n_states = self.imdp_transition_matrix.shape[0]
         n_actions = self.imdp_transition_matrix.shape[1]
 
@@ -377,7 +486,7 @@ class CFBoundCalculator:
 
         transitions = [(s, a, s_prime) for s in range(n_states) for a in range(n_actions) for s_prime in range(n_states)]
 
-        upper_bounds, lower_bounds = self.run_parallel(transitions)
+        upper_bounds, lower_bounds = self.run_parallel_approx(transitions)
         
         for s in range(n_states):
             for a in range(n_actions):
@@ -387,7 +496,46 @@ class CFBoundCalculator:
         return interval_cf_transition_matrix
     
 
-class MultiStepCFBoundCalculator:
+    def parallel_calculate_all_bounds_tight(self):
+        n_states = self.imdp_transition_matrix.shape[0]
+        n_actions = self.imdp_transition_matrix.shape[1]
+
+        interval_cf_transition_matrix = np.zeros(shape=(n_states, n_actions, n_states, 2))
+
+        transitions = [(s, a, s_prime) for s in range(n_states) for a in range(n_actions) for s_prime in range(n_states)]
+
+        upper_bounds, lower_bounds = self.run_parallel_tight(transitions)
+        
+        for s in range(n_states):
+            for a in range(n_actions):
+                for s_prime in range(n_states):
+                    interval_cf_transition_matrix[s, a, s_prime] = [upper_bounds[(s, a, s_prime)], lower_bounds[(s, a, s_prime)]]
+                
+        return interval_cf_transition_matrix
+    
+
+class MultiStepCFBoundCalculatorTight:
+    def __init__(self, imdp_transition_matrix):
+        self.imdp_transition_matrix = imdp_transition_matrix
+
+    def calculate_bounds(self, trajectory):
+        n_timesteps = len(trajectory)
+        n_states = self.imdp_transition_matrix.shape[0]
+        n_actions = self.imdp_transition_matrix.shape[1]
+        assert(self.imdp_transition_matrix.shape[2] == n_states)
+        assert(self.imdp_transition_matrix.shape[3] == 2)
+
+        interval_cf_transition_matrix = np.zeros(shape=(n_timesteps, n_states, n_actions, n_states, 2))
+
+        for t in range(n_timesteps):
+            print(f"Calculating bounds at time t={t}")
+            bound_calculator = CFBoundCalculator(trajectory[t][0], trajectory[t][2], trajectory[t][1], self.imdp_transition_matrix)
+            interval_cf_transition_matrix[t] = bound_calculator.calculate_all_bounds_tight()
+
+        return interval_cf_transition_matrix
+    
+
+class MultiStepCFBoundCalculatorApprox:
     def __init__(self, imdp_transition_matrix):
         self.imdp_transition_matrix = imdp_transition_matrix
 
@@ -404,50 +552,50 @@ class MultiStepCFBoundCalculator:
         for t in range(n_timesteps):
             print(f"Calculating bounds at time t={t}")
             bound_calculator = CFBoundCalculator(trajectory[t][0], trajectory[t][2], trajectory[t][1], self.imdp_transition_matrix)
-            interval_cf_transition_matrix[t] = bound_calculator.calculate_all_bounds()
+            interval_cf_transition_matrix[t] = bound_calculator.calculate_all_bounds_approx()
 
         return interval_cf_transition_matrix
 
 
-class ParallelMultiStepCFBoundCalculator:
-    def __init__(self, imdp_transition_matrix):
-        self.imdp_transition_matrix = imdp_transition_matrix
+# class ParallelMultiStepCFBoundCalculator:
+#     def __init__(self, imdp_transition_matrix):
+#         self.imdp_transition_matrix = imdp_transition_matrix
 
     
-    def run_parallel(self, t, trajectory, bounds):
-        bound_calculator = CFBoundCalculator(trajectory[t][0], trajectory[t][2], trajectory[t][1], self.imdp_transition_matrix)
+#     def run_parallel(self, t, trajectory, bounds):
+#         bound_calculator = CFBoundCalculator(trajectory[t][0], trajectory[t][2], trajectory[t][1], self.imdp_transition_matrix)
         
-        bounds[t] = bound_calculator.calculate_all_bounds()
+#         bounds[t] = bound_calculator.calculate_all_bounds_tight()
     
 
-    def calculate_bounds(self, trajectory):
-        n_timesteps = len(trajectory)
-        n_states = self.imdp_transition_matrix.shape[0]
-        n_actions = self.imdp_transition_matrix.shape[1]
-        assert(self.imdp_transition_matrix.shape[2] == n_states)
-        assert(self.imdp_transition_matrix.shape[3] == 2)
+#     def calculate_bounds(self, trajectory):
+#         n_timesteps = len(trajectory)
+#         n_states = self.imdp_transition_matrix.shape[0]
+#         n_actions = self.imdp_transition_matrix.shape[1]
+#         assert(self.imdp_transition_matrix.shape[2] == n_states)
+#         assert(self.imdp_transition_matrix.shape[3] == 2)
 
-        interval_cf_transition_matrix = np.zeros(shape=(n_timesteps, n_states, n_actions, n_states, 2))
+#         interval_cf_transition_matrix = np.zeros(shape=(n_timesteps, n_states, n_actions, n_states, 2))
 
-        processes = []
+#         processes = []
 
-        def _start_processes():
-            with Manager() as manager:
-                bounds = manager.dict()
+#         def _start_processes():
+#             with Manager() as manager:
+#                 bounds = manager.dict()
 
-                for t in range(n_timesteps):
-                    process = Process(target=self.run_parallel, args=(t, trajectory, bounds))
-                    processes.append(process)
-                    process.start()
+#                 for t in range(n_timesteps):
+#                     process = Process(target=self.run_parallel, args=(t, trajectory, bounds))
+#                     processes.append(process)
+#                     process.start()
 
-                for process in processes:
-                    process.join()
+#                 for process in processes:
+#                     process.join()
 
-                return bounds.copy()
+#                 return bounds.copy()
             
-        bounds = _start_processes()
+#         bounds = _start_processes()
 
-        for t in range(n_timesteps):
-            interval_cf_transition_matrix[t] = bounds[t]
+#         for t in range(n_timesteps):
+#             interval_cf_transition_matrix[t] = bounds[t]
                 
-        return interval_cf_transition_matrix
+#         return interval_cf_transition_matrix

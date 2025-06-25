@@ -350,8 +350,6 @@ class CFBoundCalculator:
         assert(not math.isnan(ub))
         ub = min(1.0, ub)
 
-        # print(f"Proc {os.getpid()} fds: {len(os.listdir(f'/proc/{os.getpid()}/fd'))}")
-
         model.dispose()
         env.dispose()
 
@@ -556,7 +554,7 @@ class MultiStepCFBoundCalculatorApprox:
 
         return interval_cf_transition_matrix
 
-
+# TODO: fix
 # class ParallelMultiStepCFBoundCalculator:
 #     def __init__(self, imdp_transition_matrix):
 #         self.imdp_transition_matrix = imdp_transition_matrix

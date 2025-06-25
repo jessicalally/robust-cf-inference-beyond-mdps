@@ -138,40 +138,6 @@ def main():
         convert_transition_matrix_to_julia_imdp(true_julia_cf_imdp, "", "", filename=f"MDPs/true_gridworld.jl")
 
 
-    # elif function_name == "generate_icfmdps":
-    #     max_transitions = int(sys.argv[2])
-    #     delta = float(sys.argv[3])
-
-    #     # Generate IMDP from simulations.
-    #     simulated_imdp = learn_imdp(mdp, num_episodes=int(max_transitions/max_steps), max_steps=max_steps, delta=delta)
-
-    #     # Generate observed path, and normalise IMDP.
-    #     observed_path = mdp.sample_suboptimal_trajectory()
-    #     simulated_imdp = normalise_imdp(simulated_imdp, observed_path)
-
-    #     # Generate approx CFIMDP from simulated IMDP.
-    #     start = time.time()
-    #     cf_bound_calculator = IMDPMultiStepCFBoundCalculatorApprox(simulated_imdp)
-    #     simulated_cf_imdp = cf_bound_calculator.calculate_bounds(observed_path)
-    #     end = time.time()
-    #     elapsed_time = end - start
-    #     print(elapsed_time)
-
-    #     with open(f"MDPs/simulated_cf_gridworld_{max_transitions}_{delta}_approx.pickle", "wb") as f:
-    #         pickle.dump(simulated_cf_imdp, f)
-
-    #     # Generate tight CFIMDP from simulated IMDP.
-    #     start = time.time()
-    #     cf_bound_calculator = IMDPMultiStepCFBoundCalculatorTight(simulated_imdp)
-    #     simulated_cf_imdp = cf_bound_calculator.calculate_bounds(observed_path)
-    #     end = time.time()
-    #     elapsed_time = end - start
-    #     print(elapsed_time)
-
-    #     with open(f"MDPs/simulated_cf_gridworld_{max_transitions}_{delta}_tight.pickle", "wb") as f:
-    #         pickle.dump(simulated_cf_imdp, f)
-
-
     elif function_name == "compare_tight_vs_approx":
         # Compares the lower bounds produced by the tight optimisation procedure vs the approximate analytical solution.
         elapsed_times_approx = []
@@ -249,8 +215,8 @@ def main():
             with open(f"MDPs/simulated_cf_gridworld_{max_transitions}_{delta}_tight.pickle", "rb") as f:
                 tight_simulated_cf_imdp = pickle.load(f)
 
-            with open(f"MDPs/true_gridworld.pickle", "rb") as f:
-                true_imdp = pickle.load(f)
+            with open(f"MDPs/true_cf_gridworld.pickle", "rb") as f:
+                true_cf_imdp = pickle.load(f)
 
             n_timesteps = approx_simulated_cf_imdp.shape[0]
             n_states = approx_simulated_cf_imdp.shape[1]
@@ -259,6 +225,10 @@ def main():
             width_diffs = []
             lb_diffs = []
             non_zero_lb_diffs = []
+            approx_diffs_to_true_ub = []
+            approx_diffs_to_true_lb = []
+            tight_diffs_to_true_ub = []
+            tight_diffs_to_true_lb = []
 
             for t in range(n_timesteps):
                 for s in range(n_states):
@@ -280,9 +250,17 @@ def main():
                             lb_diff = abs(tight_lb - approx_lb)
                             lb_diffs.append(lb_diff)
 
+                            print(f"tight={tight_simulated_cf_imdp[t, s, a, s_prime]}; approx={approx_simulated_cf_imdp[t, s, a, s_prime]}; true={true_cf_imdp[t, s, a, s_prime]}")
+
                             if not tight_lb == approx_lb:
-                                print(f"tight={tight_lb}; approx={approx_lb}; true={true_imdp[s, a, s_prime]}")
                                 non_zero_lb_diffs.append(lb_diff)
+
+                            # Compare bounds with exact CF bounds.
+                            approx_diffs_to_true_ub.append(abs(approx_simulated_cf_imdp[t, s, a, s_prime, 1] - true_cf_imdp[t, s, a, s_prime, 1]))
+                            approx_diffs_to_true_lb.append(abs(approx_simulated_cf_imdp[t, s, a, s_prime, 0] - true_cf_imdp[t, s, a, s_prime, 0]))
+
+                            tight_diffs_to_true_ub.append(abs(tight_simulated_cf_imdp[t, s, a, s_prime, 1] - true_cf_imdp[t, s, a, s_prime, 1]))
+                            tight_diffs_to_true_lb.append(abs(tight_simulated_cf_imdp[t, s, a, s_prime, 0] - true_cf_imdp[t, s, a, s_prime, 0]))
 
             average_width_diff = np.mean(np.array(width_diffs))
             average_lb_diff = np.mean(np.array(lb_diffs))
@@ -292,7 +270,9 @@ def main():
                 f.write(f"## HYPERPARAMETERS = {max_transitions}, {delta} ##\n\n")
                 f.write(f"Average width diff = {average_width_diff}\n")
                 f.write(f"Average LB diff = {average_lb_diff}\n")
-                f.write(f"Average non-zero LB diff = {average_non_zero_diff}\n\n")
+                f.write(f"Average non-zero LB diff = {average_non_zero_diff}\n")
+                f.write(f"Average diff to true ub: approx={np.mean(np.array(approx_diffs_to_true_ub))}; tight={np.mean(np.array(tight_diffs_to_true_ub))}\n")
+                f.write(f"Average diff to true lb: approx={np.mean(np.array(approx_diffs_to_true_lb))}; tight={np.mean(np.array(tight_diffs_to_true_lb))}\n\n")
 
 
     elif function_name == "test":

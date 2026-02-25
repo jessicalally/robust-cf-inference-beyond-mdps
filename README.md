@@ -1,1 +1,10 @@
-# robust-cf-inference-beyond-mdps
+# Robust Counterfactuals for Markov Decision Processes under Statistical and Causal Uncertainties
+
+Counterfactual reasoning (asking *what would have happened, had some decision been changed*) is a powerful tool for identifying causes of failure and explaining the behaviour of AI systems in sequential decision-making tasks. Two sources of uncertainty complicate counterfactual inference: statistical uncertainty in the underlying transition dynamics, and uncertainty in the true (unknown) causal model. Existing work addresses these challenges in isolation; however, no approach handles both simultaneously. In this work, we close this gap by introducing a framework for partial counterfactual inference in Markov Decision Processes that is robust to both sources of uncertainty, while remaining efficient and scalable to realistic, larger-scale environments. We evaluate our framework on a range of case studies, demonstrating its robustness and practical utility for identifying causes of failure in reinforcement learning policies and suggesting how these policies could be improved.
+
+## Instructions
+The data for the Sepsis experiment can be found [here](https://github.com/GuyLor/gumbel_max_causal_gadgets_part2/tree/main/data). Add the unzipped `diab_txr_mats-replication.pkl.zip` file to the `data/` folder.
+
+Before running the Julia files, you must install the edited `IntervalMDP.jl` package (see [here](https://github.com/Zinoex/IntervalMDP.jl) for more information about the `IntervalMDP.jl` package) provided in this repository. To do this, `cd` into the `IntervalMDP.jl` folder, and run `julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'`.
+
+To replicate the experiments, you can either run the `.sh` scripts that are provided for each of the MDP environments. The `.sh` scripts are: `run_gridworld_experiment.sh` (GridWorld (p=0.9)), `run_gridworld_uncertain_experiment.sh` (GridWorld (p=0.4)), `run_sepsis_experiment.sh` (Sepsis), `run_frozen_lake_experiment.sh` (Frozen Lake) and `run_aircraft_experiment.sh`. These will run all the experiments in the paper.

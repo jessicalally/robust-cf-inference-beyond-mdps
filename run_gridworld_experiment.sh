@@ -1,22 +1,26 @@
 #!/bin/bash
 
-# Generating the ICFMDPs
+echo "GridWorld (p=0.9)"
 echo "Generating the ICFMDPs..."
-python3 evaluate_simulated_imdp.py train
+python3 evaluation.py --env gridworld --o generate_data_max_actions --max_t 10 --init 0
 
-# Run robust value iteration on generated ICFMDPs
-echo "Running robust value iteration..."
-for max_transitions in 1000 2500 5000 10000; do
-    for delta in 0.01 0.05 0.1 0.2; do
-        echo "Running experiment (${max_transitions}, ${delta})"
-        julia "MDPs/simulated_gridworld_${max_transitions}_${delta}.jl"
+# Generate policies from Julia files.
+for i in {0..99}; do
+    for max_transitions in 100000; do
+        for delta in 0.1; do
+            echo "Running experiments $i"
+            julia MDPs/GridWorld_0.9/pac/simulated_GridWorld_0.9_${max_transitions}_${delta}_max_actions_${i}_approx.jl
+            julia MDPs/GridWorld_0.9/pac/simulated_GridWorld_0.9_${max_transitions}_${delta}_max_actions_${i}_tight.jl
+            julia MDPs/GridWorld_0.9/pac/simulated_GridWorld_0.9_${max_transitions}_${delta}_max_actions_${i}_gumbel.jl
+        done
     done
+
+    julia MDPs/GridWorld_0.9/pac/simulated_GridWorld_0.9_true_max_actions_${i}.jl
 done
 
-julia "MDPs/true_gridworld.jl"
+echo "Evaluating policies..."
+python3 evaluation.py --env gridworld --o run_max_actions --max_t 10 --init 0
 
-# Evaluating policy performance
-echo "Evaluating policy performance..."
-python3 evaluate_simulated_imdp.py test
-
-python3 evaluate_simulated_imdp.py foo
+# Evaluating CF correctness.
+echo "Evaluating CF correctness..."
+python3 evaluation.py --env gridworld --o cf_correctness --max_t 10 >> gridworld_0.9_simulated_cf_correctness.txt

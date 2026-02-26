@@ -5,6 +5,6 @@ Counterfactual reasoning (asking *what would have happened, had some decision be
 ## Instructions
 The data for the Sepsis experiment can be found [here](https://github.com/GuyLor/gumbel_max_causal_gadgets_part2/tree/main/data). Add the unzipped `diab_txr_mats-replication.pkl.zip` file to the `data/` folder.
 
-Before running the Julia files, you must install the edited `IntervalMDP.jl` package (see [here](https://github.com/Zinoex/IntervalMDP.jl) for more information about the `IntervalMDP.jl` package) provided in this repository. To do this, `cd` into the `IntervalMDP.jl` folder, and run `julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'`.
+Before running the Julia files, you must install our edited version of the `IntervalMDP.jl` package (see [here](https://github.com/Zinoex/IntervalMDP.jl) for more information about the `IntervalMDP.jl` package) provided in this repository. To do this, `cd` into the `IntervalMDP.jl` folder, and run `julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'`.
 
 To replicate the experiments, you can either run the `.sh` scripts that are provided for each of the MDP environments. The `.sh` scripts are: `run_gridworld_experiment.sh` (GridWorld (p=0.9)), `run_gridworld_uncertain_experiment.sh` (GridWorld (p=0.4)), `run_sepsis_experiment.sh` (Sepsis), `run_frozen_lake_experiment.sh` (Frozen Lake) and `run_aircraft_experiment.sh`. These will run all the experiments in the paper.
